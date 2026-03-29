@@ -41,8 +41,8 @@ enum ErrCode {
 };
 
 unsigned long lastpress;
-DeviceState state = CALIBRATION_RANGE;
-DeviceState prevstate = RUNNING;
+DeviceState state = CALIBRATION_CARAC;
+DeviceState prevstate = CALIBRATION_RANGE;
 
 ErrCode errorcode = ERR_NONE;
 
@@ -50,6 +50,9 @@ uint16_t lowPot1 = 0;
 uint16_t highPot1 = 4096;
 uint16_t lowPot2 = 0;
 uint16_t highPot2 = 4096;
+
+long pot1DynMean;
+long pot2DynMean;
 
 uint16_t sample_chk; //initialized at 1 down the line
 uint16_t true_cnt;
@@ -136,6 +139,10 @@ void setup() {
 }
 
 void loop() {
+  #ifdef DEBUG
+    Serial.print(">state:");
+    Serial.printf("%d\n",state);
+  #endif
   if (state == RUNNING) {
     // uint16_t angle = readAS5600RawAngle();
     uint16_t angle=0;
@@ -201,29 +208,57 @@ void loop() {
   } else if (state==CALIBRATION_CARAC){
     if (prevstate==CALIBRATION_RANGE){
       sample_chk = 1; //
+
+      //this handles the true counts of our individual range measurements
       true_cnt = 0;
+      // //these means are updated dynamically to check the centering of our samples.
+      // pot1DynMean=0;
+      // pot2DynMean=0;
+      //then also check for interval between values?
+      //the mean of the intervals btw values should be less than 2/3? value to tweak? /!\ account for edges as spaces /!\
+      //the actual value should only depend and be a function of the true_cnt required count whoch would be 50?.
+      //this cannot be computed on the fly and will require a loop if we pass mean and true count.
+      //and should solve our distribution "width" too small problem.
       memset(samples, 0, sizeof(sampling_data_t)*NSAMPLES);
+      prevstate=CALIBRATION_CARAC; //DO NOT FORGET ELSE WE REWRITE ON LOOP
     }
     //n points = 100 50 based on pot 1 and 50 based on pot 2
     
     uint16_t pot1 = analogRead(POT1_PIN);
     uint16_t pot2 = analogRead(POT2_PIN);
-    
-    Serial.print(">pot1: ");
-    Serial.printf("%d\n", pot1);
-    Serial.print(">pot2: ");
-    Serial.printf("%d\n", pot2);
-    
+
+    #ifdef DEBUG
+      Serial.print(">pot1: ");
+      Serial.printf("%d\n", pot1);
+      Serial.print(">pot2: ");
+      Serial.printf("%d\n", pot2);
+    #endif
     //on peut utilsier teleplot pour tester
     
     //then check in their respective areas where the samples could be added*
-    unsigned int ix1 = min(max((pot1-lowPot1)/(highPot1-lowPot1), 0), NSAMPLES-1); 
+    unsigned int ix1 = (int) min(max(double(pot1-lowPot1)/(highPot1-lowPot1), 0.0) * NSAMPLES, (double) NSAMPLES-1);
     // unsigned int ix2 = min(max((pot2-lowPot2)/(highPot2-lowPot2), 0), NSAMPLES-1);
     unsigned char cnt1 = samples[ix1].count;
+
+    #ifdef DEBUG
+      Serial.print(">cnt1: ");
+      Serial.printf("%d\n", cnt1);
+      Serial.print(">ix1: ");
+      Serial.printf("%d\n", ix1);
+      Serial.print(">lowPot1: ");
+      Serial.printf("%d\n", lowPot1);
+      Serial.print(">highPot1: ");
+      Serial.printf("%d\n", highPot1);
+    #endif
+
     if (cnt1<SAMPLE_MEANING_CNT){
       if (cnt1==0){
         true_cnt++;
       }
+      #ifdef DEBUG
+        Serial.print(">XY: ");
+        Serial.printf("%d:%d|xy\n", pot1,pot2);
+      #endif
 
       //sampling means whithin each range. Assuming we are on a local slope the meaning should still keep us on the line?
       samples[ix1].a = (samples[ix1].a*cnt1 + pot1)/(cnt1+1);
@@ -233,18 +268,53 @@ void loop() {
     }
 
     //then compute coverage to check if we have a good characteristic, let's say every 5 samples?
+    #ifdef DEBUG
+      Serial.print(">sample_chk: ");
+      Serial.printf("%d\n", sample_chk);
+      Serial.print(">true_cnt: ");
+      Serial.printf("%d\n", true_cnt);
+    #endif
     if (sample_chk==SAMPLE_CHECK_FREQ){
       sample_chk=1; //reset sample check counter
       //check we have at least 50% of samples full and our mean is close to the mean value
-      if (true_cnt>NSAMPLES){
+      
+      if (true_cnt>NSAMPLES || DEBUG){
+        float meandelta = 0;
+        unsigned int prev=-1;
+        unsigned int cnt=1;
+        for (unsigned int i =0; i<NSAMPLES; i++){
+          if (samples[i].count!=0){
+            meandelta+=i-prev;
+            prev=i;
+            cnt++;
+          } else{
+            //no prob just continue?
+          }
+        }
+        //and add the end one too
+        if (samples[NSAMPLES-1].count==0){
+          meandelta+=NSAMPLES-prev;
+        }
+        meandelta/=cnt;
+        #ifdef DEBUG
+        Serial.print(">meandelta: ");
+        Serial.printf("%.4lf\n", meandelta);
+        #endif
 
+        if (meandelta<1.3){ //this was a reliably achievable value during testing.
+          //save the array.
+          state=CALIBRATION_SAVE;
+        }
+
+      } else{
+        //basic condition not met: continue sampling
       }
     } else{
-      sample_chk++;
+      sample_chk+=1;
     }
 
   } else if (state==CALIBRATION_SAVE){
-    
+  
   } else {
     // ERROR state: blink LED ominously
     // MAKE IT POSSIBLE TO GO TO CALIBRATION FROM AN ERROR STATE?
