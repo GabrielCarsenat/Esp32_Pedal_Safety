@@ -10,6 +10,19 @@
 
 #define AS5600_ADDR 0x36 // default I2C address
 
+/*
+RANGE TAKING PART
+*/
+
+#define MIN_SWEEP 400
+unsigned int sweep_count;
+boolean sweep_dir;
+//https://youtu.be/YGXCnZMGa6M PAIN
+
+/*
+SAMPLE TAKING PART
+*/
+
 //careful not to exceed max sample count: memory is 512 bytes and we have three bytes per sample
 //so 170 is the upper cap + don't forget possible additional meta for number of samples and max/min ranges retained.
 //also whether there's been a calibration at all. 
@@ -181,6 +194,8 @@ void loop() {
       lowPot1=4096;
       highPot2=0;
       lowPot2=4096;
+      sweep_count=0;
+      sweep_dir=1;
     }
     uint16_t pot1 = analogRead(POT1_PIN);
     uint16_t pot2 = analogRead(POT2_PIN);
@@ -189,6 +204,32 @@ void loop() {
     if (pot1 < lowPot1) lowPot1 = pot1;
     if (pot2 > highPot2) highPot2 = pot2;
     if (pot2 < lowPot2) lowPot2 = pot2;
+
+    uint16_t delta_pot1 = (highPot1>lowPot1) ? highPot1-lowPot1 : 0;
+    uint16_t delta_potH = (highPot1>pot1) ? highPot1-pot1 : 0;
+    uint16_t delta_potL = (pot1>lowPot1) ? pot1-lowPot1 : 0;
+
+    
+    if (delta_pot1>MIN_SWEEP){
+      if (sweep_dir){
+        if (delta_potH<delta_pot1/3){
+          sweep_dir = !sweep_dir;
+          sweep_count++;
+        }
+      } else{
+        if (delta_potL<delta_pot1/3){
+          sweep_dir = !sweep_dir;
+          sweep_count++;
+        }
+      }
+    }
+
+
+
+    if (sweep_count>3){
+      prevstate = CALIBRATION_RANGE;
+      state=CALIBRATION_CARAC;
+    }
 
     #ifdef DEBUG
       Serial.print(">pot1: ");
@@ -203,6 +244,9 @@ void loop() {
       Serial.printf("%d\n", lowPot1);
       Serial.print(">Lpot2: ");
       Serial.printf("%d\n", lowPot2);
+      Serial.print(">sweep_count: ");
+      Serial.printf("%d\n", sweep_count);
+      
     #endif
   
   } else if (state==CALIBRATION_CARAC){
